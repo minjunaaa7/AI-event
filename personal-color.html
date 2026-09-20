@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>퍼스널컬러 진단</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <h1>퍼스널컬러 진단</h1>
+  <p class="subtitle">정면을 바라보고, 안경을 벗은 상태로 촬영하면 더 정확합니다. 그늘지지 않은 밝은 곳에서 촬영하세요.</p>
+
+  <div class="card" id="captureCard">
+    <p class="status-line">가능하면 흰 종이를 얼굴 옆에 대주세요. 화이트밸런스 보정에 사용되어 정확도가 올라갑니다.</p>
+    <p class="status-line" id="engineBadge" style="margin-top:4px;">엔진 확인 중...</p>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas" style="display:none;"></canvas>
+    <div style="margin-top:14px;">
+      <button class="full" id="captureBtn">촬영하기</button>
+    </div>
+  </div>
+
+  <div class="card" id="loadingCard" style="display:none;">
+    <p class="status-line" id="loadingText">분석 중입니다...</p>
+  </div>
+
+  <div class="card" id="retryCard" style="display:none;">
+    <p class="status-line" id="retryReason" style="word-break:break-all; white-space:pre-wrap;"></p>
+    <button class="full" id="retryFromErrorBtn">다시 촬영하기</button>
+  </div>
+
+  <div class="card" id="resultCard" style="display:none;">
+    <h2 id="resultTitle">-</h2>
+    <p id="resultDesc" class="status-line"></p>
+    <div id="palette" style="margin-top:14px;"></div>
+    <button class="secondary full" style="margin-top:16px;" id="retryBtn">다시 진단하기</button>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="js/firebase-init.js?v=3"></script>
+<script src="js/db-helper.js?v=3"></script>
+<script src="js/ai-engine.js?v=3"></script>
+<script>
+const teamId = getTeamId();
+let stream = null;
+
+if (typeof initEngineWatcher !== "function") {
+  document.getElementById("engineBadge").textContent =
+    "오류: js/ai-engine.js 를 불러오지 못했습니다. 파일이 업로드되었는지 확인하세요.";
+}
+
+const TYPES = {
+  springWarm: {
+    title: "봄 웜톤",
+    desc: "밝고 화사한 웜톤입니다. 코랄, 피치, 아이보리 계열이 잘 어울립니다.",
+    colors: ["#FF8C69", "#FFD59E", "#FFF3C4", "#B7D98A"]
+  },
+  autumnWarm: {
+    title: "가을 웜톤",
+    desc: "차분하고 깊은 웜톤입니다. 카키, 브라운, 머스타드 계열이 잘 어울립니다.",
+    colors: ["#A9702B", "#C97F3C", "#7A5C3E", "#B79A5C"]
+  },
+  summerCool: {
+    title: "여름 쿨톤",
+    desc: "밝고 부드러운 쿨톤입니다. 라벤더, 로즈, 소프트 그레이 계열이 잘 어울립니다.",
+    colors: ["#C9A6D9", "#F2A6C0", "#9FB8D9", "#D9D9D9"]
+  },
+  winterCool: {
+    title: "겨울 쿨톤",
+    desc: "선명하고 대비가 강한 쿨톤입니다. 블랙, 화이트, 핫핑크 계열이 잘 어울립니다.",
+    colors: ["#1C1C1E", "#E6007A", "#0B4F8A", "#FFFFFF"]
+  }
+};
+
+// 엔진 모드 감시 시작 (관리자 화면에서 전환 가능)
+const badgeEl = document.getElementById("engineBadge");
+if (badgeEl) badgeEl.textContent = "엔진 확인 중... (스크립트 " + (typeof AI_ENGINE_VERSION !== "undefined" ? AI_ENGINE_VERSION : "구버전") + ")";
+
+initEngineWatcher((mode, note) => {
+  const badge = document.getElementById("engineBadge");
+  if (!badge) return;
+  badge.textContent = "현재 엔진: " + (mode === "browser" ? "브라우저 방식" : "서버 방식")
+    + (note ? " — " + note : "");
+});
+
+async function startCamera() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+    document.getElementById("video").srcObject = stream;
+  } catch (e) {
+    showOnly("retryCard");
+    document.getElementById("retryReason").textContent = "카메라를 사용할 수 없습니다: " + e.message;
+  }
+}
+startCamera();
+db.ref("teams/" + teamId + "/personalColorStatus").set("대기중");
+
+function showOnly(id) {
+  ["captureCard", "loadingCard", "retryCard", "resultCard"].forEach(c =>
+    document.getElementById(c).style.display = (c === id) ? "block" : "none");
+}
+
+function rgbToLab(r, g, b) {
+  let [rl, gl, bl] = [r, g, b].map(v => {
+    v /= 255;
+    return v > 0.04045 ? Math.pow((v + 0.055) / 1.055, 2.4) : v / 12.92;
+  });
+  const x = (rl * 0.4124 + gl * 0.3576 + bl * 0.1805) / 0.95047;
+  const y = (rl * 0.2126 + gl * 0.7152 + bl * 0.0722) / 1.0;
+  const z = (rl * 0.0193 + gl * 0.1192 + bl * 0.9505) / 1.08883;
+  const f = t => t > 0.008856 ? Math.cbrt(t) : (7.787 * t + 16 / 116);
+  const fx = f(x), fy = f(y), fz = f(z);
+  return { L: 116 * fy - 16, a: 500 * (fx - fy), b: 200 * (fy - fz) };
+}
+
+function classify(skinLab, depthScore) {
+  const warm = skinLab.b > 12;
+  const light = depthScore > 60;
+  if (warm && light) return "springWarm";
+  if (warm && !light) return "autumnWarm";
+  if (!warm && light) return "summerCool";
+  return "winterCool";
+}
+
+function samplePatch(imgData, width, height, cx, cy, radius) {
+  const rs = [], gs = [], bs = [];
+  const x0 = Math.max(0, Math.round(cx - radius)), x1 = Math.min(width - 1, Math.round(cx + radius));
+  const y0 = Math.max(0, Math.round(cy - radius)), y1 = Math.min(height - 1, Math.round(cy + radius));
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const idx = (y * width + x) * 4;
+      const r = imgData[idx], g = imgData[idx + 1], b = imgData[idx + 2];
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (lum < 25 || lum > 248) continue;
+      rs.push(r); gs.push(g); bs.push(b);
+    }
+  }
+  if (rs.length === 0) return null;
+  const median = arr => { const s = [...arr].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+  return { r: median(rs), g: median(gs), b: median(bs) };
+}
+
+function averageColors(colors) {
+  const valid = colors.filter(Boolean);
+  if (valid.length === 0) return null;
+  const sum = valid.reduce((acc, c) => ({ r: acc.r + c.r, g: acc.g + c.g, b: acc.b + c.b }), { r: 0, g: 0, b: 0 });
+  return { r: sum.r / valid.length, g: sum.g / valid.length, b: sum.b / valid.length };
+}
+
+document.getElementById("captureBtn").onclick = async () => {
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(video, 0, 0);
+  const base64 = canvas.toDataURL("image/jpeg", 0.92).split(",")[1];
+
+  showOnly("loadingCard");
+  document.getElementById("loadingText").textContent =
+    getEngineMode() === "browser"
+      ? "분석 중입니다... (처음 실행 시 준비에 시간이 걸릴 수 있습니다)"
+      : "분석 중입니다...";
+  db.ref("teams/" + teamId + "/personalColorStatus").set("진단중");
+  if (stream) stream.getTracks().forEach(t => t.stop());
+
+  try {
+    const detection = await detectFace(base64, canvas);
+
+    if (!detection) {
+      showOnly("retryCard");
+      document.getElementById("retryReason").textContent = "얼굴을 인식하지 못했습니다. 정면을 바라보고 다시 촬영해주세요.";
+      db.ref("teams/" + teamId + "/personalColorStatus").set("대기중");
+      return;
+    }
+
+    const P = detection.points;
+    const eyeDist = detection.eyeDist;
+    const width = canvas.width, height = canvas.height;
+    const imgData = ctx.getImageData(0, 0, width, height).data;
+    const patchRadius = Math.max(4, eyeDist * 0.12);
+
+    const skinPatches = [P.leftCheek, P.rightCheek, P.forehead]
+      .filter(Boolean)
+      .map(p => samplePatch(imgData, width, height, p.x, p.y, patchRadius));
+    const skinColor = averageColors(skinPatches);
+
+    if (!skinColor) {
+      showOnly("retryCard");
+      document.getElementById("retryReason").textContent = "피부색을 정확히 읽지 못했습니다. 조명이 밝은 곳에서 다시 촬영해주세요.";
+      db.ref("teams/" + teamId + "/personalColorStatus").set("대기중");
+      return;
+    }
+
+    const scleraPatches = [P.leftSclera, P.rightSclera]
+      .filter(Boolean)
+      .map(p => samplePatch(imgData, width, height, p.x, p.y, patchRadius * 0.6));
+    const scleraColor = averageColors(scleraPatches);
+
+    let correctedSkin = skinColor;
+    if (scleraColor) {
+      const target = 210;
+      const clamp = v => Math.max(0.75, Math.min(1.35, v));
+      const fr = clamp(target / scleraColor.r);
+      const fg = clamp(target / scleraColor.g);
+      const fb = clamp(target / scleraColor.b);
+      correctedSkin = {
+        r: Math.min(255, skinColor.r * fr),
+        g: Math.min(255, skinColor.g * fg),
+        b: Math.min(255, skinColor.b * fb)
+      };
+    }
+
+    let hairLab = null;
+    if (P.forehead) {
+      const hairPoint = { x: P.forehead.x, y: P.forehead.y - eyeDist * 1.3 };
+      const hairPatch = samplePatch(imgData, width, height, hairPoint.x, hairPoint.y, patchRadius);
+      if (hairPatch) hairLab = rgbToLab(hairPatch.r, hairPatch.g, hairPatch.b);
+    }
+
+    const skinLab = rgbToLab(correctedSkin.r, correctedSkin.g, correctedSkin.b);
+    const depthScore = hairLab ? (skinLab.L * 0.7 + hairLab.L * 0.3) : skinLab.L;
+
+    const type = classify(skinLab, depthScore);
+    const info = TYPES[type];
+
+    showOnly("resultCard");
+    document.getElementById("resultTitle").textContent = info.title;
+    document.getElementById("resultDesc").textContent = info.desc;
+    document.getElementById("palette").innerHTML = info.colors.map(c =>
+      `<span style="display:inline-block;width:40px;height:40px;border-radius:8px;background:${c};margin-right:8px;border:1px solid #ccc;"></span>`
+    ).join("");
+
+    db.ref("teams/" + teamId + "/personalColorStatus").set("완료: " + info.title);
+  } catch (e) {
+    showOnly("retryCard");
+    document.getElementById("retryReason").textContent = "분석 중 오류가 발생했습니다: " + e.message;
+    db.ref("teams/" + teamId + "/personalColorStatus").set("대기중");
+  }
+};
+
+document.getElementById("retryBtn").onclick = () => location.reload();
+document.getElementById("retryFromErrorBtn").onclick = () => location.reload();
+</script>
+</body>
+</html>

@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>말로 코딩하기</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <!-- 마이크 테스트 -->
+  <div class="card" id="micTestCard">
+    <h1>마이크 테스트</h1>
+    <p class="subtitle">시작 전, 마이크가 정상 작동하는지 확인합니다.</p>
+    <button class="full" id="micRecordBtn">5초간 녹음 시작</button>
+    <p class="status-line" id="micStatus"></p>
+    <audio id="micPlayback" style="display:none; width:100%; margin-top:10px;" controls></audio>
+    <button class="full secondary" id="micNextBtn" style="display:none; margin-top:14px;">확인했어요, 계속하기</button>
+  </div>
+
+  <!-- 미션 목록 -->
+  <div class="card" id="missionListCard" style="display:none;">
+    <h1>말로 코딩하기</h1>
+    <p class="subtitle">미션을 선택하세요.</p>
+    <div class="menu-list" id="missionList"></div>
+  </div>
+
+  <!-- 미션 소개 -->
+  <div class="card" id="missionIntroCard" style="display:none;">
+    <h2 id="introTitle"></h2>
+    <p id="introContent"></p>
+    <div style="margin-top:10px;">
+      <strong>사전에 알아야 할 정보</strong><br>
+      <div id="introKeywords" style="margin-top:8px;"></div>
+    </div>
+    <p class="status-line" style="margin-top:14px;">화면: 사진 첨부 예정</p>
+    <button class="full" id="introNextBtn" style="margin-top:14px;">다음</button>
+  </div>
+
+  <!-- 시간 선택 -->
+  <div class="card" id="timeSelectCard" style="display:none;">
+    <h2>제한 시간 설정 (초)</h2>
+    <div class="big-number" id="timeDisplay">0</div>
+    <div class="numpad" id="numpad">
+      <button data-n="1">1</button><button data-n="2">2</button><button data-n="3">3</button>
+      <button data-n="4">4</button><button data-n="5">5</button><button data-n="6">6</button>
+      <button data-n="7">7</button><button data-n="8">8</button><button data-n="9">9</button>
+      <button id="clearBtn">지우기</button><button data-n="0">0</button><button id="backBtn">←</button>
+    </div>
+    <p class="status-line" style="text-align:center;margin-top:10px;">키보드 숫자키로도 입력 가능합니다</p>
+    <button class="full" id="timeStartBtn" style="margin-top:16px;">시작</button>
+  </div>
+
+  <!-- 미션 수행 -->
+  <div class="card" id="missionRunCard" style="display:none;">
+    <h2 id="runTitle"></h2>
+    <div id="runKeywords" style="margin-bottom:10px;"></div>
+    <p class="status-line">남은 시간: <span id="runTimer">-</span>초</p>
+    <div id="chatLog" style="border:1px solid var(--line); border-radius:8px; padding:12px; height:220px; overflow-y:auto; margin:10px 0; background:#fff;"></div>
+    <div style="display:flex; gap:8px;">
+      <input type="text" id="chatInput" placeholder="명령을 입력하세요">
+      <button id="chatSend">전송</button>
+    </div>
+  </div>
+
+  <!-- 결과 -->
+  <div class="card" id="resultCard" style="display:none;">
+    <h2>결과</h2>
+    <p id="resultText" class="big-number"></p>
+    <button class="full secondary" id="backToListBtn">미션 목록으로</button>
+  </div>
+
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="js/firebase-init.js?v=3"></script>
+<script src="js/db-helper.js?v=3"></script>
+<script>
+const teamId = getTeamId();
+
+// ===== 마이크 테스트 =====
+function showOnly(id) {
+  ["micTestCard","missionListCard","missionIntroCard","timeSelectCard","missionRunCard","resultCard"]
+    .forEach(c => document.getElementById(c).style.display = (c === id) ? "block" : "none");
+}
+
+if (sessionStorage.getItem("micTested") === "yes") {
+  showOnly("missionListCard");
+} else {
+  showOnly("micTestCard");
+}
+
+document.getElementById("micRecordBtn").onclick = async () => {
+  document.getElementById("micStatus").textContent = "녹음 중... (5초)";
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const recorder = new MediaRecorder(stream);
+    const chunks = [];
+    recorder.ondataavailable = e => chunks.push(e.data);
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: "audio/webm" });
+      const url = URL.createObjectURL(blob);
+      document.getElementById("micPlayback").src = url;
+      document.getElementById("micPlayback").style.display = "block";
+      document.getElementById("micNextBtn").style.display = "block";
+      document.getElementById("micStatus").textContent = "녹음이 끝났습니다. 아래에서 재생해 확인하세요.";
+      stream.getTracks().forEach(t => t.stop());
+    };
+    recorder.start();
+    setTimeout(() => recorder.stop(), 5000);
+  } catch (e) {
+    document.getElementById("micStatus").textContent = "마이크에 접근할 수 없습니다: " + e.message;
+  }
+};
+
+document.getElementById("micNextBtn").onclick = () => {
+  sessionStorage.setItem("micTested", "yes");
+  showOnly("missionListCard");
+};
+
+// ===== 미션 데이터 =====
+const KNOWN_INFO = ["밥", "숟가락", "도자기", "흰 그릇", "동그란", "들다"];
+
+const MISSIONS = [
+  {
+    id: 1,
+    name: "1번 미션",
+    content: "무한이에게 밥을 먹여라.",
+    groups: [
+      { keywords: ["그릇"], hint: "밥이 어디있는데?" },
+      { keywords: ["숟가락"], hint: "밥을 먹는건 어떻게 하는데?" },
+      { keywords: ["잡", "뜨", "입"], hint: "숟가락은 어떻게 사용해?" }
+    ]
+  },
+  ...Array.from({length: 8}, (_, i) => ({ id: i + 2, name: (i + 2) + "번 미션", locked: true }))
+];
+
+let currentMission = null;
+let timeLimit = 0;
+let timerInterval = null;
+let startedAt = null;
+let stepsCleared = 0;
+
+function renderMissionList() {
+  const list = document.getElementById("missionList");
+  list.innerHTML = "";
+  MISSIONS.forEach(m => {
+    const div = document.createElement("a");
+    div.className = "menu-item";
+    div.href = "#";
+    div.innerHTML = `<strong>${m.name}</strong><span>${m.locked ? "준비중" : "선택 가능"}</span>`;
+    if (!m.locked) {
+      div.onclick = (e) => { e.preventDefault(); openIntro(m); };
+    } else {
+      div.style.opacity = "0.5";
+      div.onclick = (e) => e.preventDefault();
+    }
+    list.appendChild(div);
+  });
+}
+renderMissionList();
+
+function openIntro(mission) {
+  currentMission = mission;
+  stepsCleared = 0;
+  document.getElementById("introTitle").textContent = mission.name;
+  document.getElementById("introContent").textContent = mission.content;
+  document.getElementById("introKeywords").innerHTML = KNOWN_INFO.map(k => `<span class="keyword-chip">${k}</span>`).join("");
+  showOnly("missionIntroCard");
+}
+
+document.getElementById("introNextBtn").onclick = () => {
+  timeLimit = 0;
+  document.getElementById("timeDisplay").textContent = "0";
+  showOnly("timeSelectCard");
+};
+
+// ===== 넘버패드 (화면 + 키보드) =====
+document.querySelectorAll("#numpad button[data-n]").forEach(btn => {
+  btn.onclick = () => {
+    timeLimit = timeLimit * 10 + parseInt(btn.dataset.n, 10);
+    document.getElementById("timeDisplay").textContent = timeLimit;
+  };
+});
+document.getElementById("clearBtn").onclick = () => {
+  timeLimit = 0;
+  document.getElementById("timeDisplay").textContent = "0";
+};
+document.getElementById("backBtn").onclick = () => {
+  timeLimit = Math.floor(timeLimit / 10);
+  document.getElementById("timeDisplay").textContent = timeLimit;
+};
+document.addEventListener("keydown", (e) => {
+  if (document.getElementById("timeSelectCard").style.display !== "block") return;
+  if (e.key >= "0" && e.key <= "9") {
+    timeLimit = timeLimit * 10 + parseInt(e.key, 10);
+    document.getElementById("timeDisplay").textContent = timeLimit;
+  } else if (e.key === "Backspace") {
+    timeLimit = Math.floor(timeLimit / 10);
+    document.getElementById("timeDisplay").textContent = timeLimit;
+  }
+});
+
+document.getElementById("timeStartBtn").onclick = () => {
+  if (timeLimit <= 0) { alert("1초 이상 입력하세요."); return; }
+  startMission();
+};
+
+// ===== 미션 수행 =====
+function addChatLine(who, text) {
+  const log = document.getElementById("chatLog");
+  const line = document.createElement("div");
+  line.style.marginBottom = "8px";
+  line.innerHTML = `<strong>${who}:</strong> ${text}`;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+function startMission() {
+  showOnly("missionRunCard");
+  document.getElementById("runTitle").textContent = currentMission.name;
+  document.getElementById("runKeywords").innerHTML = KNOWN_INFO.map(k => `<span class="keyword-chip">${k}</span>`).join("");
+  document.getElementById("chatLog").innerHTML = "";
+  addChatLine("무한이", "명령을 내려줘!");
+
+  startedAt = Date.now();
+  clearInterval(timerInterval);
+  timerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    const remain = timeLimit - elapsed;
+    document.getElementById("runTimer").textContent = Math.max(0, remain);
+    if (remain <= 0) {
+      clearInterval(timerInterval);
+      finishMission(false);
+    }
+  }, 300);
+}
+
+document.getElementById("chatSend").onclick = sendCommand;
+document.getElementById("chatInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sendCommand();
+});
+
+function sendCommand() {
+  const input = document.getElementById("chatInput");
+  const text = input.value.trim();
+  if (!text) return;
+  addChatLine("나", text);
+  input.value = "";
+
+  const groups = currentMission.groups;
+  const allMatched = groups.every(g => g.keywords.some(k => text.includes(k)));
+
+  if (allMatched) {
+    stepsCleared = groups.length;
+    addChatLine("무한이", "미션완료!");
+    clearInterval(timerInterval);
+    finishMission(true);
+    return;
+  }
+
+  // 아직 통과 못한 첫 그룹의 힌트 표시
+  for (let i = 0; i < groups.length; i++) {
+    const matched = groups[i].keywords.some(k => text.includes(k));
+    if (!matched) {
+      addChatLine("무한이", groups[i].hint);
+      stepsCleared = i;
+      break;
+    }
+  }
+}
+
+async function finishMission(success) {
+  const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+  const min = Math.floor(elapsed / 60), sec = elapsed % 60;
+  let resultText;
+  let resultForAdmin;
+
+  if (success) {
+    resultText = `미션성공, 성공시간: ${min}분 ${sec}초`;
+    resultForAdmin = "성공 (" + min + "분 " + sec + "초)";
+  } else {
+    const totalGroups = currentMission.groups.length;
+    const pct = Math.floor((stepsCleared / totalGroups) * 100 / 4) * 4;
+    resultText = `미션 ${pct}% 완료`;
+    resultForAdmin = pct + "% 완료";
+  }
+
+  document.getElementById("resultText").textContent = resultText;
+  showOnly("resultCard");
+
+  await db.ref("teams/" + teamId + "/coding").set({
+    missionName: currentMission.name,
+    result: resultForAdmin
+  });
+}
+
+document.getElementById("backToListBtn").onclick = () => showOnly("missionListCard");
+</script>
+</body>
+</html>

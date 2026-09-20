@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>관리자 화면</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <h1>관리자 화면</h1>
+  <p class="subtitle">팀 점수 관리 및 활동 진행 제어</p>
+
+  <div class="card">
+    <h2>AI 엔진 설정</h2>
+    <p class="status-line">퍼스널컬러와 손글씨 인식에 어떤 방식을 쓸지 정합니다. 학생 화면에 즉시 반영됩니다.</p>
+    <div class="grid-2" style="margin-top:12px;">
+      <button id="engineApi">서버 방식 (Google Vision)</button>
+      <button id="engineBrowser">브라우저 방식 (태블릿 직접)</button>
+    </div>
+    <p class="status-line" id="engineStatus" style="margin-top:10px;">현재: -</p>
+    <p class="status-line" style="margin-top:6px;">
+      서버 방식: 정확하고 태블릿 성능과 무관. Google Cloud 결제 계정 등록 필요.<br>
+      브라우저 방식: 무료이고 결제 계정 불필요. 태블릿 성능이 낮으면 느리거나 실패할 수 있음.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>팀 목록 / 점수</h2>
+    <table id="teamTable">
+      <thead><tr><th>조</th><th>점수</th><th>수정</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>손글씨 인식 피하기 게임 진행</h2>
+    <div class="grid-2">
+      <div>
+        <label>제시어</label>
+        <input type="text" id="hwWord" placeholder="예: 코끼리">
+      </div>
+      <div>
+        <label>작성 시간(초)</label>
+        <input type="number" id="hwSeconds" value="30">
+      </div>
+    </div>
+    <div style="margin-top:14px; display:flex; gap:10px;">
+      <button id="hwStart">시작 (3초 카운트다운 후 진행)</button>
+      <button class="secondary" id="hwReset">초기화</button>
+    </div>
+    <p class="status-line" id="hwPhaseView">현재 상태: idle</p>
+  </div>
+
+  <div class="card">
+    <h2>퍼스널컬러 진단 현황</h2>
+    <table id="pcTable">
+      <thead><tr><th>조</th><th>상태</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>말로 코딩하기 진행 현황</h2>
+    <table id="codingTable">
+      <thead><tr><th>조</th><th>미션</th><th>진행률</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>AI 오목 전적</h2>
+    <table id="omokTable">
+      <thead><tr><th>조</th><th>대전 상대</th><th>결과</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="js/firebase-init.js?v=3"></script>
+<script src="js/db-helper.js?v=3"></script>
+<script>
+// ---- AI 엔진 전환 ----
+const ENGINE_LABEL = {
+  api: "서버 방식 (Google Vision)",
+  browser: "브라우저 방식 (태블릿 직접)"
+};
+
+watchPath("settings/aiEngine", (v) => {
+  const mode = v || "api";
+  document.getElementById("engineStatus").textContent = "현재: " + (ENGINE_LABEL[mode] || mode);
+});
+
+document.getElementById("engineApi").onclick = () => setPath("settings/aiEngine", "api");
+document.getElementById("engineBrowser").onclick = () => setPath("settings/aiEngine", "browser");
+
+// ---- 팀 점수 관리 ----
+watchTeams((teams) => {
+  const tbody = document.querySelector("#teamTable tbody");
+  tbody.innerHTML = "";
+  Object.entries(teams).forEach(([id, t]) => {
+    if (!t.name) return;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${t.name}</td>
+      <td>${t.score || 0}</td>
+      <td><input type="number" style="width:80px" value="${t.score || 0}" id="score_${id}"></td>
+      <td>
+        <button class="secondary" onclick="applyScore('${id}')">적용</button>
+        <button class="secondary" onclick="resetScore('${id}')">0으로</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+
+  // 퍼스널컬러 현황
+  const pcBody = document.querySelector("#pcTable tbody");
+  pcBody.innerHTML = "";
+  Object.entries(teams).forEach(([id, t]) => {
+    if (!t.name) return;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${t.name}</td><td>${t.personalColorStatus || "대기중"}</td>`;
+    pcBody.appendChild(tr);
+  });
+
+  // 코딩미션 현황
+  const codingBody = document.querySelector("#codingTable tbody");
+  codingBody.innerHTML = "";
+  Object.entries(teams).forEach(([id, t]) => {
+    if (!t.name) return;
+    const c = t.coding || {};
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${t.name}</td><td>${c.missionName || "-"}</td><td>${c.result || "-"}</td>`;
+    codingBody.appendChild(tr);
+  });
+
+  // 오목 전적
+  const omokBody = document.querySelector("#omokTable tbody");
+  omokBody.innerHTML = "";
+  Object.entries(teams).forEach(([id, t]) => {
+    if (!t.name || !t.omok) return;
+    Object.values(t.omok.history || {}).forEach(h => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${t.name}</td><td>${h.opponent}</td><td>${h.result}</td>`;
+      omokBody.appendChild(tr);
+    });
+  });
+});
+
+async function applyScore(id) {
+  const val = parseInt(document.getElementById("score_" + id).value, 10) || 0;
+  await setScore(id, val);
+}
+async function resetScore(id) {
+  await setScore(id, 0);
+}
+
+// ---- 손글씨 게임 진행 제어 ----
+watchPath("sessions/handwriting", (s) => {
+  document.getElementById("hwPhaseView").textContent = "현재 상태: " + (s ? s.phase : "idle");
+});
+
+document.getElementById("hwStart").onclick = async () => {
+  const word = document.getElementById("hwWord").value.trim();
+  const seconds = parseInt(document.getElementById("hwSeconds").value, 10) || 30;
+  if (!word) { alert("제시어를 입력하세요."); return; }
+
+  await setPath("sessions/handwriting", {
+    phase: "countdown",
+    word: word,
+    writeSeconds: seconds,
+    countdownStartedAt: Date.now()
+  });
+
+  setTimeout(async () => {
+    await setPath("sessions/handwriting", {
+      phase: "writing",
+      word: word,
+      writeSeconds: seconds,
+      startedAt: Date.now()
+    });
+  }, 3000);
+};
+
+document.getElementById("hwReset").onclick = async () => {
+  await setPath("sessions/handwriting", { phase: "idle" });
+};
+</script>
+</body>
+</html>
