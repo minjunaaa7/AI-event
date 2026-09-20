@@ -71,11 +71,11 @@ const TYPES = {
 };
 
 // 엔진 모드 감시 시작 (관리자 화면에서 전환 가능)
-initEngineWatcher((mode) => {
+initEngineWatcher((mode, note) => {
   const badge = document.getElementById("engineBadge");
-  if (badge) {
-    badge.textContent = "현재 엔진: " + (mode === "browser" ? "브라우저 방식" : "서버 방식");
-  }
+  if (!badge) return;
+  badge.textContent = "현재 엔진: " + (mode === "browser" ? "브라우저 방식" : "서버 방식")
+    + (note ? " — " + note : "");
 });
 
 async function startCamera() {

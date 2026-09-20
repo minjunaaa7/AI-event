@@ -12,15 +12,31 @@ let _engineLoaded = false;
 let _engineWaiters = [];
 
 function initEngineWatcher(onChange) {
-  db.ref("settings/aiEngine").on("value", (snap) => {
-    _engineMode = snap.val() || "api";
+  const finish = (mode, note) => {
+    _engineMode = mode;
     if (!_engineLoaded) {
       _engineLoaded = true;
       _engineWaiters.forEach(fn => fn(_engineMode));
       _engineWaiters = [];
     }
-    if (onChange) onChange(_engineMode);
-  });
+    if (onChange) onChange(_engineMode, note);
+  };
+
+  try {
+    db.ref("settings/aiEngine").on(
+      "value",
+      (snap) => finish(snap.val() || "api", null),
+      (err) => finish("api", "설정 읽기 실패: " + err.message)
+    );
+  } catch (e) {
+    finish("api", "Firebase 연결 실패: " + e.message);
+    return;
+  }
+
+  // 3초 안에 응답이 없으면 기본값으로 진행
+  setTimeout(() => {
+    if (!_engineLoaded) finish("api", "설정 응답 없음 (Firebase 연결 확인 필요)");
+  }, 3000);
 }
 
 // Firebase에서 설정값을 읽어올 때까지 기다립니다 (최대 5초).
