@@ -118,6 +118,17 @@ document.getElementById("captureBtn").onclick = async () => {
       body: JSON.stringify({ base64: base64, feature: "DOCUMENT_TEXT_DETECTION" })
     });
     const data = await resp.json();
+
+    if (!resp.ok || !data.responses) {
+      const msg = data.error
+        ? (typeof data.error === "string" ? data.error : data.error.message)
+        : ("서버 응답 코드 " + resp.status);
+      throw new Error(msg);
+    }
+    if (data.responses[0] && data.responses[0].error) {
+      throw new Error(data.responses[0].error.message);
+    }
+
     const annotation = data.responses[0].fullTextAnnotation;
     const recognizedText = annotation ? annotation.text.trim() : "(인식 안 됨)";
 

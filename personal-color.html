@@ -179,6 +179,17 @@ document.getElementById("captureBtn").onclick = async () => {
       body: JSON.stringify({ base64: base64, feature: "FACE_DETECTION" })
     });
     const faceData = await faceResp.json();
+
+    if (!faceResp.ok || !faceData.responses) {
+      const msg = faceData.error
+        ? (typeof faceData.error === "string" ? faceData.error : faceData.error.message)
+        : ("서버 응답 코드 " + faceResp.status);
+      throw new Error(msg);
+    }
+    if (faceData.responses[0] && faceData.responses[0].error) {
+      throw new Error(faceData.responses[0].error.message);
+    }
+
     const face = faceData.responses[0].faceAnnotations && faceData.responses[0].faceAnnotations[0];
 
     if (!face) {

@@ -10,7 +10,11 @@ module.exports = async (req, res) => {
     return res.status(500).json({ error: "서버에 VISION_API_KEY가 설정되지 않았습니다." });
   }
 
-  const { base64, feature } = req.body || {};
+  let body = req.body;
+  if (typeof body === "string") {
+    try { body = JSON.parse(body); } catch (e) { body = {}; }
+  }
+  const { base64, feature } = body || {};
   if (!base64 || !feature) {
     return res.status(400).json({ error: "base64, feature 값이 필요합니다." });
   }
