@@ -13,6 +13,7 @@
 
   <div class="card" id="captureCard">
     <p class="status-line">가능하면 흰 종이를 얼굴 옆에 대주세요. 화이트밸런스 보정에 사용되어 정확도가 올라갑니다.</p>
+    <p class="status-line" id="engineBadge" style="margin-top:4px;">엔진 확인 중...</p>
     <video id="video" autoplay playsinline></video>
     <canvas id="canvas" style="display:none;"></canvas>
     <div style="margin-top:14px;">
@@ -70,7 +71,12 @@ const TYPES = {
 };
 
 // 엔진 모드 감시 시작 (관리자 화면에서 전환 가능)
-initEngineWatcher();
+initEngineWatcher((mode) => {
+  const badge = document.getElementById("engineBadge");
+  if (badge) {
+    badge.textContent = "현재 엔진: " + (mode === "browser" ? "브라우저 방식" : "서버 방식");
+  }
+});
 
 async function startCamera() {
   try {
