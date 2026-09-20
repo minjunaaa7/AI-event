@@ -45,8 +45,10 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="js/firebase-init.js"></script>
 <script src="js/db-helper.js"></script>
+<script src="js/ai-engine.js"></script>
 <script>
 const teamId = getTeamId();
+initEngineWatcher();
 let currentPhase = "idle";
 let writingInterval = null;
 let stream = null;
@@ -112,25 +114,8 @@ document.getElementById("captureBtn").onclick = async () => {
   if (stream) stream.getTracks().forEach(t => t.stop());
 
   try {
-    const resp = await fetch("/api/vision", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ base64: base64, feature: "DOCUMENT_TEXT_DETECTION" })
-    });
-    const data = await resp.json();
-
-    if (!resp.ok || !data.responses) {
-      const msg = data.error
-        ? (typeof data.error === "string" ? data.error : data.error.message)
-        : ("서버 응답 코드 " + resp.status);
-      throw new Error(msg);
-    }
-    if (data.responses[0] && data.responses[0].error) {
-      throw new Error(data.responses[0].error.message);
-    }
-
-    const annotation = data.responses[0].fullTextAnnotation;
-    const recognizedText = annotation ? annotation.text.trim() : "(인식 안 됨)";
+    const recognized = await recognizeText(base64, canvas);
+    const recognizedText = recognized || "(인식 안 됨)";
 
     // 세션의 원래 제시어와 비교
     const sessSnap = await db.ref("sessions/handwriting/word").get();

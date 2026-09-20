@@ -10,14 +10,10 @@
 <div class="wrap">
   <h1>퍼스널컬러 진단</h1>
   <p class="subtitle">정면을 바라보고, 안경을 벗은 상태로 촬영하면 더 정확합니다. 그늘지지 않은 밝은 곳에서 촬영하세요.</p>
-  <p class="subtitle" style="margin-top:-20px;">더 정확한 진단을 원하면, 머리 뒤 위쪽 양쪽 점선 박스 안에 흰 종이가 보이도록 대주세요. (없어도 진단은 가능합니다)</p>
 
   <div class="card" id="captureCard">
-    <div style="position:relative;">
-      <video id="video" autoplay playsinline></video>
-      <div style="position:absolute; top:4%; left:4%; width:18%; height:18%; border:2px dashed #fff; box-shadow:0 0 0 1px rgba(0,0,0,.4); border-radius:4px; pointer-events:none;"></div>
-      <div style="position:absolute; top:4%; right:4%; width:18%; height:18%; border:2px dashed #fff; box-shadow:0 0 0 1px rgba(0,0,0,.4); border-radius:4px; pointer-events:none;"></div>
-    </div>
+    <p class="status-line">가능하면 흰 종이를 얼굴 옆에 대주세요. 화이트밸런스 보정에 사용되어 정확도가 올라갑니다.</p>
+    <video id="video" autoplay playsinline></video>
     <canvas id="canvas" style="display:none;"></canvas>
     <div style="margin-top:14px;">
       <button class="full" id="captureBtn">촬영하기</button>
@@ -25,11 +21,11 @@
   </div>
 
   <div class="card" id="loadingCard" style="display:none;">
-    <p class="status-line">분석 중입니다...</p>
+    <p class="status-line" id="loadingText">분석 중입니다...</p>
   </div>
 
   <div class="card" id="retryCard" style="display:none;">
-    <p class="status-line" id="retryReason"></p>
+    <p class="status-line" id="retryReason" style="word-break:break-all; white-space:pre-wrap;"></p>
     <button class="full" id="retryFromErrorBtn">다시 촬영하기</button>
   </div>
 
@@ -45,6 +41,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="js/firebase-init.js"></script>
 <script src="js/db-helper.js"></script>
+<script src="js/ai-engine.js"></script>
 <script>
 const teamId = getTeamId();
 let stream = null;
@@ -72,9 +69,17 @@ const TYPES = {
   }
 };
 
+// 엔진 모드 감시 시작 (관리자 화면에서 전환 가능)
+initEngineWatcher();
+
 async function startCamera() {
-  stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
-  document.getElementById("video").srcObject = stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+    document.getElementById("video").srcObject = stream;
+  } catch (e) {
+    showOnly("retryCard");
+    document.getElementById("retryReason").textContent = "카메라를 사용할 수 없습니다: " + e.message;
+  }
 }
 startCamera();
 db.ref("teams/" + teamId + "/personalColorStatus").set("대기중");
@@ -106,17 +111,16 @@ function classify(skinLab, depthScore) {
   return "winterCool";
 }
 
-// ---- 지정한 박스 영역을 그림자/하이라이트 제외하고 중앙값으로 샘플링 ----
-function sampleBox(imgData, width, height, x0, y0, x1, y1, excludeExtremes) {
+function samplePatch(imgData, width, height, cx, cy, radius) {
   const rs = [], gs = [], bs = [];
-  x0 = Math.max(0, Math.round(x0)); x1 = Math.min(width - 1, Math.round(x1));
-  y0 = Math.max(0, Math.round(y0)); y1 = Math.min(height - 1, Math.round(y1));
+  const x0 = Math.max(0, Math.round(cx - radius)), x1 = Math.min(width - 1, Math.round(cx + radius));
+  const y0 = Math.max(0, Math.round(cy - radius)), y1 = Math.min(height - 1, Math.round(cy + radius));
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
       const idx = (y * width + x) * 4;
       const r = imgData[idx], g = imgData[idx + 1], b = imgData[idx + 2];
       const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-      if (excludeExtremes && (lum < 25 || lum > 248)) continue; // 그림자 / 완전 클리핑 제외
+      if (lum < 25 || lum > 248) continue;
       rs.push(r); gs.push(g); bs.push(b);
     }
   }
@@ -125,38 +129,11 @@ function sampleBox(imgData, width, height, x0, y0, x1, y1, excludeExtremes) {
   return { r: median(rs), g: median(gs), b: median(bs) };
 }
 
-function samplePatch(imgData, width, height, cx, cy, radius) {
-  return sampleBox(imgData, width, height, cx - radius, cy - radius, cx + radius, cy + radius, true);
-}
-
-// 흰 종이 가이드 박스(화면 좌우 상단, 4%~22% 위치) 색상 샘플.
-// 무채색이고 충분히 밝아야 "종이가 실제로 보인다"고 판단. 아니면 null 반환.
-function samplePaperReference(imgData, width, height) {
-  const boxes = [
-    [width * 0.04, height * 0.04, width * 0.22, height * 0.22],
-    [width * 0.78, height * 0.04, width * 0.96, height * 0.22]
-  ];
-  const samples = boxes
-    .map(([x0, y0, x1, y1]) => sampleBox(imgData, width, height, x0, y0, x1, y1, false))
-    .filter(Boolean)
-    .filter(c => {
-      const lum = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
-      const spread = Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b);
-      return lum > 140 && spread < 35; // 밝고 무채색이어야 종이로 인정
-    });
-  return averageColors(samples);
-}
-
 function averageColors(colors) {
   const valid = colors.filter(Boolean);
   if (valid.length === 0) return null;
   const sum = valid.reduce((acc, c) => ({ r: acc.r + c.r, g: acc.g + c.g, b: acc.b + c.b }), { r: 0, g: 0, b: 0 });
   return { r: sum.r / valid.length, g: sum.g / valid.length, b: sum.b / valid.length };
-}
-
-function findLandmark(landmarks, type) {
-  const lm = (landmarks || []).find(l => l.type === type);
-  return lm ? lm.position : null;
 }
 
 document.getElementById("captureBtn").onclick = async () => {
@@ -169,55 +146,30 @@ document.getElementById("captureBtn").onclick = async () => {
   const base64 = canvas.toDataURL("image/jpeg", 0.92).split(",")[1];
 
   showOnly("loadingCard");
+  document.getElementById("loadingText").textContent =
+    getEngineMode() === "browser"
+      ? "분석 중입니다... (처음 실행 시 준비에 시간이 걸릴 수 있습니다)"
+      : "분석 중입니다...";
   db.ref("teams/" + teamId + "/personalColorStatus").set("진단중");
   if (stream) stream.getTracks().forEach(t => t.stop());
 
   try {
-    const faceResp = await fetch("/api/vision", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ base64: base64, feature: "FACE_DETECTION" })
-    });
-    const faceData = await faceResp.json();
+    const detection = await detectFace(base64, canvas);
 
-    if (!faceResp.ok || !faceData.responses) {
-      const msg = faceData.error
-        ? (typeof faceData.error === "string" ? faceData.error : faceData.error.message)
-        : ("서버 응답 코드 " + faceResp.status);
-      throw new Error(msg);
-    }
-    if (faceData.responses[0] && faceData.responses[0].error) {
-      throw new Error(faceData.responses[0].error.message);
-    }
-
-    const face = faceData.responses[0].faceAnnotations && faceData.responses[0].faceAnnotations[0];
-
-    if (!face) {
+    if (!detection) {
       showOnly("retryCard");
       document.getElementById("retryReason").textContent = "얼굴을 인식하지 못했습니다. 정면을 바라보고 다시 촬영해주세요.";
       db.ref("teams/" + teamId + "/personalColorStatus").set("대기중");
       return;
     }
 
-    const landmarks = face.landmarks;
+    const P = detection.points;
+    const eyeDist = detection.eyeDist;
     const width = canvas.width, height = canvas.height;
     const imgData = ctx.getImageData(0, 0, width, height).data;
-
-    // 얼굴 크기(눈 사이 거리 기준)로 샘플링 반경을 얼굴 크기에 비례하게 설정
-    const leftEyeCenter = findLandmark(landmarks, "LEFT_EYE");
-    const rightEyeCenter = findLandmark(landmarks, "RIGHT_EYE");
-    let eyeDist = 60;
-    if (leftEyeCenter && rightEyeCenter) {
-      eyeDist = Math.hypot(leftEyeCenter.x - rightEyeCenter.x, leftEyeCenter.y - rightEyeCenter.y);
-    }
     const patchRadius = Math.max(4, eyeDist * 0.12);
 
-    // 피부 샘플: 양쪽 볼 + 이마
-    const leftCheek = findLandmark(landmarks, "LEFT_CHEEK_CENTER");
-    const rightCheek = findLandmark(landmarks, "RIGHT_CHEEK_CENTER");
-    const forehead = findLandmark(landmarks, "FOREHEAD_GLABELLA");
-
-    const skinPatches = [leftCheek, rightCheek, forehead]
+    const skinPatches = [P.leftCheek, P.rightCheek, P.forehead]
       .filter(Boolean)
       .map(p => samplePatch(imgData, width, height, p.x, p.y, patchRadius));
     const skinColor = averageColors(skinPatches);
@@ -229,32 +181,18 @@ document.getElementById("captureBtn").onclick = async () => {
       return;
     }
 
-    // 화이트밸런스 기준: 1순위 흰 종이(넓고 안정적), 2순위 눈의 흰자(공막)
-    let wbColor = samplePaperReference(imgData, width, height);
-    let wbTarget = 225; // 흰 종이 기준 목표값
-    let wbSource = "paper";
-
-    if (!wbColor) {
-      const leftPupil = findLandmark(landmarks, "LEFT_EYE_PUPIL");
-      const leftCorner = findLandmark(landmarks, "LEFT_EYE_LEFT_CORNER");
-      const rightPupil = findLandmark(landmarks, "RIGHT_EYE_PUPIL");
-      const rightCorner = findLandmark(landmarks, "RIGHT_EYE_RIGHT_CORNER");
-
-      const scleraPoints = [];
-      if (leftPupil && leftCorner) scleraPoints.push({ x: (leftPupil.x + leftCorner.x) / 2, y: (leftPupil.y + leftCorner.y) / 2 });
-      if (rightPupil && rightCorner) scleraPoints.push({ x: (rightPupil.x + rightCorner.x) / 2, y: (rightPupil.y + rightCorner.y) / 2 });
-
-      wbColor = averageColors(scleraPoints.map(p => samplePatch(imgData, width, height, p.x, p.y, patchRadius * 0.6)));
-      wbTarget = 210; // 공막 기준 목표값 (종이보다 약간 낮게)
-      wbSource = "sclera";
-    }
+    const scleraPatches = [P.leftSclera, P.rightSclera]
+      .filter(Boolean)
+      .map(p => samplePatch(imgData, width, height, p.x, p.y, patchRadius * 0.6));
+    const scleraColor = averageColors(scleraPatches);
 
     let correctedSkin = skinColor;
-    if (wbColor) {
+    if (scleraColor) {
+      const target = 210;
       const clamp = v => Math.max(0.75, Math.min(1.35, v));
-      const fr = clamp(wbTarget / wbColor.r);
-      const fg = clamp(wbTarget / wbColor.g);
-      const fb = clamp(wbTarget / wbColor.b);
+      const fr = clamp(target / scleraColor.r);
+      const fg = clamp(target / scleraColor.g);
+      const fb = clamp(target / scleraColor.b);
       correctedSkin = {
         r: Math.min(255, skinColor.r * fr),
         g: Math.min(255, skinColor.g * fg),
@@ -262,10 +200,9 @@ document.getElementById("captureBtn").onclick = async () => {
       };
     }
 
-    // 머리카락 샘플 (이마 위쪽, 얼굴 크기에 비례한 위치) - 밝기 톤 보조 지표
     let hairLab = null;
-    if (forehead) {
-      const hairPoint = { x: forehead.x, y: forehead.y - eyeDist * 1.3 };
+    if (P.forehead) {
+      const hairPoint = { x: P.forehead.x, y: P.forehead.y - eyeDist * 1.3 };
       const hairPatch = samplePatch(imgData, width, height, hairPoint.x, hairPoint.y, patchRadius);
       if (hairPatch) hairLab = rgbToLab(hairPatch.r, hairPatch.g, hairPatch.b);
     }
