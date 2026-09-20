@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 체험 활동</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <h1>AI 체험 활동</h1>
+  <p class="subtitle">조 이름을 입력하고 활동을 선택하세요.</p>
+
+  <div class="card">
+    <h2>조 정보</h2>
+    <div class="grid-2">
+      <div>
+        <label>조 번호</label>
+        <input type="text" id="teamNumber" placeholder="예: 1조">
+      </div>
+      <div>
+        <label>조 이름</label>
+        <input type="text" id="teamName" placeholder="예: 무한도전">
+      </div>
+    </div>
+    <div style="margin-top:14px;">
+      <button class="full" id="saveTeam">저장</button>
+    </div>
+    <p class="status-line" id="saveStatus"></p>
+  </div>
+
+  <div class="card">
+    <div class="status-line">현재 점수</div>
+    <div class="big-number" id="currentScore">0</div>
+  </div>
+
+  <div class="menu-list">
+    <a class="menu-item" href="personal-color.html">
+      <strong>퍼스널컬러 진단</strong>
+      <span>카메라로 나에게 어울리는 컬러를 찾아보세요</span>
+    </a>
+    <a class="menu-item" href="handwriting-game.html">
+      <strong>손글씨 인식 피하기 게임</strong>
+      <span>AI가 내 글씨를 알아보지 못하게 써보세요</span>
+    </a>
+    <a class="menu-item" href="coding-mission.html">
+      <strong>말로 코딩하기</strong>
+      <span>말로 명령을 내려서 미션을 완료하세요</span>
+    </a>
+    <a class="menu-item" href="omok.html">
+      <strong>AI와 오목</strong>
+      <span>AI를 상대로 오목 대결을 해보세요</span>
+    </a>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="js/firebase-init.js"></script>
+<script src="js/db-helper.js"></script>
+<script>
+const teamId = getTeamId();
+
+// 기존 저장된 이름 불러오기
+db.ref("teams/" + teamId).get().then(snap => {
+  const v = snap.val();
+  if (v && v.name) {
+    const parts = v.name.split(" / ");
+    if (parts[0]) document.getElementById("teamNumber").value = parts[0];
+    if (parts[1]) document.getElementById("teamName").value = parts[1];
+  }
+});
+
+document.getElementById("saveTeam").onclick = async () => {
+  const num = document.getElementById("teamNumber").value.trim();
+  const name = document.getElementById("teamName").value.trim();
+  if (!num || !name) {
+    document.getElementById("saveStatus").textContent = "조 번호와 조 이름을 모두 입력하세요.";
+    return;
+  }
+  await registerTeam(num + " / " + name);
+  document.getElementById("saveStatus").textContent = "저장되었습니다.";
+};
+
+watchPath("teams/" + teamId + "/score", (score) => {
+  document.getElementById("currentScore").textContent = score || 0;
+});
+</script>
+</body>
+</html>
