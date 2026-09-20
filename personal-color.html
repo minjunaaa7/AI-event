@@ -40,12 +40,17 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
-<script src="js/firebase-init.js"></script>
-<script src="js/db-helper.js"></script>
-<script src="js/ai-engine.js"></script>
+<script src="js/firebase-init.js?v=3"></script>
+<script src="js/db-helper.js?v=3"></script>
+<script src="js/ai-engine.js?v=3"></script>
 <script>
 const teamId = getTeamId();
 let stream = null;
+
+if (typeof initEngineWatcher !== "function") {
+  document.getElementById("engineBadge").textContent =
+    "오류: js/ai-engine.js 를 불러오지 못했습니다. 파일이 업로드되었는지 확인하세요.";
+}
 
 const TYPES = {
   springWarm: {
@@ -71,6 +76,9 @@ const TYPES = {
 };
 
 // 엔진 모드 감시 시작 (관리자 화면에서 전환 가능)
+const badgeEl = document.getElementById("engineBadge");
+if (badgeEl) badgeEl.textContent = "엔진 확인 중... (스크립트 " + (typeof AI_ENGINE_VERSION !== "undefined" ? AI_ENGINE_VERSION : "구버전") + ")";
+
 initEngineWatcher((mode, note) => {
   const badge = document.getElementById("engineBadge");
   if (!badge) return;
